@@ -12,15 +12,12 @@ if [ ! -f "/etc/x-ui/x-ui.db" ]; then
     exit 1
 fi
 
-# Автоустановка зависимостей
 if ! command -v python3 &> /dev/null || ! command -v sqlite3 &> /dev/null; then
-    echo -e "${YELLOW}Установка недостающих пакетов (python3, sqlite3)...${NC}"
     export DEBIAN_FRONTEND=noninteractive
     apt update >/dev/null 2>&1
     apt install -y python3 sqlite3 >/dev/null 2>&1
 fi
 
-# Генерация через Python
 python3 -c "
 import sqlite3, sys
 
