@@ -1,0 +1,87 @@
+#!/bin/bash
+
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+RED='\033[0;31m'
+NC='\033[0m'
+
+echo -e "${YELLOW}=== АДАПТАЦИЯ NGINX ПОД БАЗУ 3X-UI ===${NC}"
+
+# Проверка, что база существует
+if [ ! -f "/etc/x-ui/x-ui.db" ]; then
+    echo -e "${RED}Ошибка: База данных /etc/x-ui/x-ui.db не найдена!${NC}"
+    exit 1
+fi
+
+# Запускаем Python для чтения базы и генерации конфига
+python3 -c "
+import sqlite3, subprocess, sys
+
+# 1. Подключаемся к базе
+try:
+    conn = sqlite3.connect('/etc/x-ui/x-ui.db')
+    c = conn.cursor()
+    c.execute(\"SELECT key, value FROM settings WHERE key IN ('webPort', 'webBasePath', 'subPort', 'subPath', 'subDomain')\")
+    db = dict(c.fetchall())
+    conn.close()
+except Exception as e:
+    print(f'\033[0;31mОшибка при чтении базы: {e}\033[0m')
+    sys.exit(1)
+
+# 2. Достаем данные (с фолбэками, если чего-то нет)
+domain = db.get('subDomain', 'llm.atms2006.ru')
+if not domain: domain = 'llm.atms2006.ru'
+
+panel_port = db.get('webPort', '45000')
+panel_path = db.get('webBasePath', '/panel/')
+sub_port = db.get('subPort', '55000')
+sub_path = db.get('subPath', '/sub/')
+
+# 3. Делаем пути красивыми (со слэшами)
+if not panel_path.startswith('/'): panel_path = '/' + panel_path
+if not panel_path.endswith('/'): panel_path += '/'
+if not sub_path.startswith('/'): sub_path = '/' + sub_path
+if not sub_path.endswith('/'): sub_path += '/'
+
+cert = f'/etc/letsencrypt/live/{domain}/fullchain.pem'
+key = f'/etc/letsencrypt/live/{domain}/privkey.pem'
+
+# 4. Генерируем конфиг
+config = f'''
+server {{
+    listen 80; server_name {domain};
+    location /.well-known/acme-challenge/ {{ root /var/www/certbot; }}
+    location / {{ return 301 https://\$host\$request_uri; }}
+}}
+server {{
+    listen 127.0.0.1:40000 ssl http2;
+    server_name {domain};
+    ssl_certificate {cert};
+    ssl_certificate_key {key};
+    set_real_ip_from 127.0.0.1; real_ip_header X-Forwarded-For;
+    
+    location / {{ root /var/www/decoy; index index.html; }}
+    location {panel_path} {{ proxy_pass http://127.0.0.1:{panel_port}; proxy_http_version 1.1; proxy_set_header Upgrade \$http_upgrade; proxy_set_header Connection \"upgrade\"; proxy_set_header Host \$host; }}
+    location {sub_path} {{ proxy_pass http://127.0.0.1:{sub_port}; proxy_set_header Host \$host; }}
+}}
+'''
+
+# 5. Записываем в файл
+with open('/etc/nginx/sites-available/decoy', 'w') as f:
+    f.write(config)
+
+print(f'\033[0;32m=== КОНФИГ NGINX УСПЕШНО ОБНОВЛЕН ===\033[0m')
+print(f'  Домен:        {domain}')
+print(f'  Путь панели:  {panel_path} (порт {panel_port})')
+print(f'  Путь подписок:{sub_path} (порт {sub_port})')
+"
+
+# Перезагружаем Nginx
+echo -e "${YELLOW}Перезагрузка Nginx...${NC}"
+nginx -t && systemctl reload nginx
+
+if [ $? -eq 0 ]; then
+    echo -e "${GREEN}Готово! Nginx перезапущен и работает с новыми путями.${NC}"
+else
+    echo -e "${RED}Ошибка синтаксиса Nginx! Проверьте конфиг.${NC}"
+fi
