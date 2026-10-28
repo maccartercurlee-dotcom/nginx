@@ -7,13 +7,12 @@ NC='\033[0m'
 
 echo -e "${YELLOW}=== АДАПТАЦИЯ NGINX ПОД БАЗУ 3X-UI ===${NC}"
 
-# Проверка, что база существует
 if [ ! -f "/etc/x-ui/x-ui.db" ]; then
     echo -e "${RED}Ошибка: База данных /etc/x-ui/x-ui.db не найдена!${NC}"
     exit 1
 fi
 
-# Проверка и АВТОМАТИЧЕСКАЯ УСТАНОВКА зависимостей
+# Автоустановка зависимостей
 if ! command -v python3 &> /dev/null || ! command -v sqlite3 &> /dev/null; then
     echo -e "${YELLOW}Установка недостающих пакетов (python3, sqlite3)...${NC}"
     export DEBIAN_FRONTEND=noninteractive
@@ -21,7 +20,7 @@ if ! command -v python3 &> /dev/null || ! command -v sqlite3 &> /dev/null; then
     apt install -y python3 sqlite3 >/dev/null 2>&1
 fi
 
-# Запускаем Python для чтения базы и генерации конфига
+# Генерация через Python
 python3 -c "
 import sqlite3, sys
 
@@ -35,7 +34,6 @@ except Exception as e:
     print(f'\033[0;31mОшибка при чтении базы: {e}\033[0m')
     sys.exit(1)
 
-# Достаем данные (с фолбэками)
 domain = db.get('subDomain', 'llm.atms2006.ru')
 if not domain: domain = 'llm.atms2006.ru'
 
@@ -44,11 +42,9 @@ panel_path = db.get('webBasePath', '/panel/')
 sub_port = db.get('subPort', '55000')
 sub_path = db.get('subPath', '/sub/')
 
-# Защита от пустых или корневых путей
 if not panel_path or panel_path == '/': panel_path = '/panel/'
 if not sub_path or sub_path == '/': sub_path = '/sub/'
 
-# Делаем пути красивыми (со слэшами)
 if not panel_path.startswith('/'): panel_path = '/' + panel_path
 if not panel_path.endswith('/'): panel_path += '/'
 if not sub_path.startswith('/'): sub_path = '/' + sub_path
@@ -57,7 +53,6 @@ if not sub_path.endswith('/'): sub_path += '/'
 cert = f'/etc/letsencrypt/live/{domain}/fullchain.pem'
 key = f'/etc/letsencrypt/live/{domain}/privkey.pem'
 
-# Генерируем конфиг
 config = f'''
 server {{
     listen 80; server_name {domain};
@@ -77,27 +72,23 @@ server {{
 }}
 '''
 
-# Записываем в файл
 with open('/etc/nginx/sites-available/decoy', 'w') as f:
     f.write(config)
 
-print(f'\033[0;32m=== ДАННЫЕ ИЗ БАЗЫ УСПЕШНО ПРОЧИТАНЫ ===\033[0m')
-print(f'  Домен:         {domain}')
-print(f'  Путь панели:   {panel_path} (порт {panel_port})')
-print(f'  Путь подписок: {sub_path} (порт {sub_port})')
+print(f'\033[0;32m=== ДАННЫЕ ПРОЧИТАНЫ ===\033[0m')
+print(f'  Панель:   {panel_path} (порт {panel_port})')
+print(f'  Подписки: {sub_path} (порт {sub_port})')
 "
 
-# Проверяем, что Python завершился без ошибок
 if [ $? -ne 0 ]; then
-    echo -e "${RED}Ошибка в Python-скрипте! Конфиг Nginx не изменен.${NC}"
+    echo -e "${RED}Ошибка Python! Конфиг не изменен.${NC}"
     exit 1
 fi
 
-# Перезагружаем Nginx
-echo -e "${YELLOW}Проверка конфига и перезагрузка Nginx...${NC}"
+echo -e "${YELLOW}Перезагрузка Nginx...${NC}"
 if nginx -t; then
     systemctl reload nginx
-    echo -e "${GREEN}Готово! Nginx перезапущен и работает с новыми путями.${NC}"
+    echo -e "${GREEN}Готово! Nginx перезапущен.${NC}"
 else
-    echo -e "${RED}Ошибка синтаксиса Nginx! Проверьте конфиг вручную.${NC}"
+    echo -e "${RED}Ошибка синтаксиса Nginx!${NC}"
 fi
